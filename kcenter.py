@@ -1,8 +1,6 @@
-from multiprocessing import process
 import random
 import math
 import sys
-import os
 import csv
 from queue import Queue
 from datetime import datetime
@@ -224,35 +222,28 @@ def conduct_level_update(level, file_path, s):
         delete_previous_day_points([level])
     level.fully_k_center_greedy()
     level.fully_true_radius() ## NOTE: compute the true radius, just for testing, we can remove this line later
-    return 1
+    return level
 
 def get_centers(data_dir, s, k, t, z_ratio, tau, eps, d_min, d_max):
     levels = fully_initialize_level_array(k, t, z_ratio, tau, eps, d_min, d_max)
-
-    #file_names = os.listdir(data_dir)
-    #file_names = sorted(file_names)
 
     file_names = ["./data/randproj/test/" + data_dir]
 
     for file_name in file_names:
         # file_path = os.path.join(data_dir, file_name)
         print(file_name)
-
-        manager = multiprocessing.Manager()
-        shared_levels = manager.list(levels) 
         
         partial_process_data = partial(conduct_level_update, file_path=file_name, s=s)
 
-        with multiprocessing.Pool() as pool:
-            results = pool.imap(partial_process_data, (shared_levels[i] for i in range(len(shared_levels))))
-            list(results)
+        pool = multiprocessing.Pool()
+
+        levels = pool.imap(partial_process_data, levels)
+        levels = list(levels)
 
         pool.close()
         pool.join()
 
-        print(f"SHARED LEN: {len(shared_levels)}")
-
-        for level in shared_levels:
+        for level in levels:
             print(level.is_success)
             if level.is_success is True:
                 # print(level.radius)
