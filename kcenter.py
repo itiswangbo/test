@@ -1,3 +1,5 @@
+from multiprocessing import Pool
+from functools import partial
 import random
 import math
 import sys
@@ -6,9 +8,6 @@ from queue import Queue
 from datetime import datetime
 import numpy as np
 import pandas as pd
-
-import multiprocessing
-from functools import partial
 
 LABEL = 0 # NOTE: to label each point
 N_INSTANCE = 0
@@ -139,11 +138,7 @@ class Fully_Cluster():
                 W.remove(center)
 
         print(f"radius: {self.radius}, uncovered clusters: {len(W)}, covered points:{n_covered_points}, centers: {len(self.selected_centers)}")
-        print(N_POINTS-n_covered_points, self.z_ratio*(1.0+self.eps)*N_POINTS)
-        if (N_POINTS-n_covered_points) <= self.z_ratio*(1.0+self.eps)*N_POINTS:
-            self.is_success = True  
-        else: 
-            False
+        self.is_success = True if N_POINTS-n_covered_points <= self.z_ratio*(1.0+self.eps)*N_POINTS else False
 
     def fully_true_radius(self):
         dists = []
@@ -172,6 +167,10 @@ class Fully_Cluster():
 
 ## BELOW IS THE MAIN PART
 
+def process_level_add(level):
+    level.new_fully_k_center_add(LABEL, 0, N_POINTS)
+    return level
+
 def read_next_day_points(levels, file_path: str):
     global LABEL, ACTIVE_POINTS, POINTS_IN_DAYS, N_POINTS
 
@@ -189,10 +188,19 @@ def read_next_day_points(levels, file_path: str):
             ACTIVE_POINTS[LABEL] = cur_point
             N_POINTS = N_POINTS+1
             points_in_the_day.append(LABEL)
-            for level in levels:
-                level.new_fully_k_center_add(LABEL, 0, N_POINTS)
+            pool = Pool()
+            levels = list(pool.imap(process_level_add, levels))
+            pool.close()
+            pool.join()
+            # for level in levels:
+            #     level.new_fully_k_center_add(LABEL, 0, N_POINTS)
             LABEL = LABEL+1
         POINTS_IN_DAYS.put(points_in_the_day)
+    return levels
+
+def process_level_delete(level, point):
+    level.new_fully_k_center_delete(point)
+    return level
 
 def delete_previous_day_points(levels):
     global POINTS_IN_DAYS, ACTIVE_POINTS, N_POINTS
@@ -201,8 +209,14 @@ def delete_previous_day_points(levels):
     for point in points_in_the_day:
         ACTIVE_POINTS.pop(point)
         N_POINTS = N_POINTS-1
-        for level in levels:
-            level.new_fully_k_center_delete(point)
+        partial_process_level_delete = partial(process_level_delete, point=point)
+        pool = Pool()
+        levels = list(pool.imap(partial_process_level_delete, levels))
+        pool.close()
+        pool.join()
+        # for level in levels:
+        #     level.new_fully_k_center_delete(point)
+    return levels
 
 def fully_initialize_level_array(k, t, z_ratio, tau, eps, d_min, d_max):
     global N_INSTANCE
@@ -216,10 +230,7 @@ def fully_initialize_level_array(k, t, z_ratio, tau, eps, d_min, d_max):
         radius = radius*(1.0+tau)
     return levels
 
-def conduct_level_update(level, file_path, s):
-    read_next_day_points([level], file_path)
-    if POINTS_IN_DAYS.qsize() > s:
-        delete_previous_day_points([level])
+def final_process_level(level):
     level.fully_k_center_greedy()
     level.fully_true_radius() ## NOTE: compute the true radius, just for testing, we can remove this line later
     return level
@@ -227,39 +238,38 @@ def conduct_level_update(level, file_path, s):
 def get_centers(data_dir, s, k, t, z_ratio, tau, eps, d_min, d_max):
     levels = fully_initialize_level_array(k, t, z_ratio, tau, eps, d_min, d_max)
 
-    file_names = ["./data/randproj/test/" + data_dir]
+    #file_names = os.listdir(data_dir)
+    #file_names = sorted(file_names)
+
+    file_names = ["./data/randproj/" + data_dir]
 
     for file_name in file_names:
         # file_path = os.path.join(data_dir, file_name)
-        print(file_name)
-        
-        partial_process_data = partial(conduct_level_update, file_path=file_name, s=s)
+        file_path = file_name
+        print(file_path)
+        levels = read_next_day_points(levels, file_path)
+        if POINTS_IN_DAYS.qsize() > s:
+            levels = delete_previous_day_points(levels)
 
-        pool = multiprocessing.Pool()
-
-        levels = pool.imap(partial_process_data, levels)
-        levels = list(levels)
-
+        pool = Pool()
+        levels = list(pool.imap(final_process_level, levels))
         pool.close()
         pool.join()
 
         for level in levels:
-            print(level.is_success)
             if level.is_success is True:
                 # print(level.radius)
                 # print(level.true_radius)
                 cars = level.fully_get_cardinality()
-                print(f"CARD: {cars}")
                 # print(cars)
                 return level.fully_get_centers(), cars
         print("ERROR!")
-        ## FIXME: return k*[[nan]*n_features]
-        return None, [0]
+        return None
 
 def main(i):
-    result_centers,result_cars = get_centers(data_dir ="randproj_tweets_bert_2018_"+str(i)+".csv", s=1, k=2, t=400, z_ratio=0.1, tau=0.1, eps=0.1, d_min=0.4, d_max=0.7)
+    result_centers,resul_cars = get_centers(data_dir ="randproj_tweets_bert_2018_"+str(i)+".csv", s=1, k=2, t=400, z_ratio=0.1, tau=0.1, eps=0.1, d_min=0.4, d_max=0.7)
     df1 = pd.DataFrame(result_centers)
-    df2 = pd.DataFrame(result_cars)
+    df2 = pd.DataFrame(resul_cars)
     pd.concat([df1,df2],axis = 1).to_csv("./data/kCenter/2center_randproj_"+str(i)+".csv")
     #result_centers = get_centers(data_dir ="./data/randproj/test", s=1, k=2, t=350, z_ratio=0.1, tau=0.01, eps=0.1, d_min=0.3, d_max=0.6)
     
